@@ -444,7 +444,7 @@ function load() {
       name: g.name,
       timers: (g.timers || []).map(t => ({
         id: t.id,
-        name: t.name || `#${t.id}`,
+        name: (t.name && !t.name.match(/^#\d+$/)) ? t.name : '',
         elapsed: t.elapsed || 0,
         running: t.running || false,
         deadline: t.deadline || null,
@@ -616,6 +616,21 @@ function findTimer(timerId) {
   return null;
 }
 
+// ─── get timer display index ───
+function getTimerDisplayIndex(timerId) {
+  for (const group of groups) {
+    const index = group.timers.findIndex(t => t.id === timerId);
+    if (index !== -1) return index + 1;
+  }
+  return 1;
+}
+
+// ─── get timer display name ───
+function getTimerDisplayName(timer) {
+  if (timer.name) return timer.name;
+  return String(getTimerDisplayIndex(timer.id));
+}
+
 // ─── group CRUD ───
 function addGroup() {
   const newId = nextGroupId++;
@@ -683,7 +698,7 @@ function addTimer(groupId) {
   if (!group) return;
   const newId = nextTimerId++;
   group.timers.push({
-    id: newId, name: `#${newId}`, elapsed: 0, running: false,
+    id: newId, name: '', elapsed: 0, running: false,
     deadline: null, alerted: false, reachedAt: null
   });
   save();
@@ -830,6 +845,53 @@ function cancelResetConfirm() {
   btn.classList.add('btn-danger');
 }
 
+// ─── reset group ───
+let resetGroupTimers = {};
+
+function resetGroup(groupId) {
+  const btn = document.querySelector(`[data-reset-group="${groupId}"]`);
+  if (!btn) return;
+
+  if (!btn.dataset.confirm) {
+    btn.dataset.confirm = '1';
+    btn.textContent = '确认重置？';
+    btn.classList.remove('btn-danger');
+    btn.classList.add('btn-ghost');
+    resetGroupTimers[groupId] = setTimeout(() => cancelResetGroupConfirm(groupId), 3000);
+    return;
+  }
+
+  cancelResetGroupConfirm(groupId);
+  const group = groups.find(g => g.id === groupId);
+  if (!group) return;
+
+  group.timers.forEach(t => {
+    t.elapsed = 0;
+    t.running = false;
+    t.deadline = null;
+    t.alerted = false;
+    t.reachedAt = null;
+    alertedIds.delete(t.id);
+  });
+
+  if (alertedIds.size === 0) dismissBanner(); else updateAlertBanner();
+  save();
+  stopTickIfIdle();
+  stopSaveLoop();
+  renderAll();
+}
+
+function cancelResetGroupConfirm(groupId) {
+  clearTimeout(resetGroupTimers[groupId]);
+  delete resetGroupTimers[groupId];
+  const btn = document.querySelector(`[data-reset-group="${groupId}"]`);
+  if (!btn) return;
+  delete btn.dataset.confirm;
+  btn.textContent = '重置该组';
+  btn.classList.remove('btn-ghost');
+  btn.classList.add('btn-danger');
+}
+
 // ─── alerting ───
 let alertBeepLoop = null;
 const alertedIds = new Set();
@@ -841,9 +903,9 @@ function buildAlertSpeech() {
   if (items.length === 0) return '';
   if (items.length === 1) {
     const f = items[0];
-    return `${f.group.name}组${f.timer.name}号时间到`;
+    return `${f.group.name}组${getTimerDisplayName(f.timer)}号时间到`;
   }
-  return items.map(f => `${f.group.name}组${f.timer.name}号`).join('、') + '全部时间到';
+  return items.map(f => `${f.group.name}组${getTimerDisplayName(f.timer)}号`).join('、') + '全部时间到';
 }
 
 function updateAlertBanner() {
@@ -857,7 +919,7 @@ function updateAlertBanner() {
   const s = targetSeconds % 60;
   const allNames = [...alertedIds].map(id => {
     const f = findTimer(id);
-    return f ? f.timer.name : `#${id}`;
+    return f ? getTimerDisplayName(f.timer) : `#${id}`;
   });
   banner.textContent = `🔔 ${allNames.join('、')} 到达 ${m > 0 ? m + '分' : ''}${s}秒！点击关闭`;
   banner.classList.add('show');
@@ -865,7 +927,7 @@ function updateAlertBanner() {
 
 function triggerAlert(id) {
   const found = findTimer(id);
-  const label = found ? found.timer.name : `#${id}`;
+  const label = found ? getTimerDisplayName(found.timer) : `#${id}`;
   alertedIds.add(id);
   if (!alertBeepLoop) {
     alertSound();
@@ -970,10 +1032,17 @@ function renderGroupTimers(group, groupEl) {
     return (a.reachedAt || 0) - (b.reachedAt || 0);
   });
 
-  // Reorder DOM
-  sorted.forEach(t => {
+  // Reorder DOM and update display names
+  sorted.forEach((t, index) => {
     const card = getOrBuildCard(t);
     grid.appendChild(card);
+    // Update badge display name for timers without custom names
+    if (!t.name) {
+      const badge = card.querySelector('[data-part="badge"]');
+      if (badge && !badge.querySelector('input')) {
+        badge.textContent = String(index + 1);
+      }
+    }
   });
 }
 
@@ -990,6 +1059,7 @@ function buildGroup(g) {
       </div>
       <div class="group-actions">
         <button class="btn btn-success btn-sm" onclick="addTimer(${g.id})">+ 添加计时器</button>
+        <button class="btn btn-danger btn-sm" data-reset-group="${g.id}" onclick="resetGroup(${g.id})">重置该组</button>
         <button class="group-remove" onclick="removeGroup(${g.id})" title="删除分组">×</button>
       </div>
     </div>
@@ -1031,7 +1101,7 @@ function buildCard(t) {
       <button class="btn btn-ghost btn-sm" onclick="resetTimer(${t.id})">↺ 重置</button>
     </div>`;
 
-  div.querySelector('[data-part="badge"]').textContent = t.name;
+  div.querySelector('[data-part="badge"]').textContent = getTimerDisplayName(t);
   return div;
 }
 
@@ -1067,7 +1137,7 @@ function updateCard(t) {
   if (badge) {
     badge.classList.toggle('alerting', t.alerted);
     badge.classList.toggle('warning', isWarning);
-    if (!badge.querySelector('input')) badge.textContent = t.name;
+    if (!badge.querySelector('input')) badge.textContent = getTimerDisplayName(t);
   }
 
   const actionsEl = card.querySelector('[data-part="actions"]');
@@ -1119,6 +1189,7 @@ function startRename(id) {
   input.type = 'text';
   input.value = t.name;
   input.maxLength = 20;
+  input.placeholder = getTimerDisplayName(t);
   input.style.cssText = `
     background: var(--accent); color: #fff; border: none; outline: none;
     font-size: 13px; font-weight: 700; padding: 2px 6px; border-radius: 20px;
@@ -1130,9 +1201,9 @@ function startRename(id) {
 
   const commit = () => {
     const newName = input.value.trim();
-    if (newName) t.name = newName;
+    t.name = newName;
     save();
-    badge.textContent = t.name;
+    badge.textContent = getTimerDisplayName(t);
     badge.onclick = () => startRename(id);
   };
 
