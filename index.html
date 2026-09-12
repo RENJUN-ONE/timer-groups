@@ -892,6 +892,56 @@ function cancelResetGroupConfirm(groupId) {
   btn.classList.add('btn-danger');
 }
 
+// ─── start all in group ───
+let startGroupTimers = {};
+
+function startAllInGroup(groupId) {
+  const btn = document.querySelector(`[data-start-group="${groupId}"]`);
+  if (!btn) return;
+
+  if (!btn.dataset.confirm) {
+    btn.dataset.confirm = '1';
+    btn.textContent = '确认开始？';
+    btn.classList.remove('btn-primary');
+    btn.classList.add('btn-ghost');
+    startGroupTimers[groupId] = setTimeout(() => cancelStartGroupConfirm(groupId), 3000);
+    return;
+  }
+
+  cancelStartGroupConfirm(groupId);
+  const group = groups.find(g => g.id === groupId);
+  if (!group) return;
+
+  requestNotificationPermission();
+  ensureAudio();
+  targetSeconds = getTarget();
+  updateTargetDisplay();
+
+  group.timers.forEach(t => {
+    if (!t.running) {
+      t.running = true;
+      if (!t.deadline) {
+        t.deadline = Date.now() + Math.max(0, targetSeconds - t.elapsed) * 1000;
+      }
+    }
+  });
+
+  ensureTick();
+  startSaveLoop();
+  renderAll();
+}
+
+function cancelStartGroupConfirm(groupId) {
+  clearTimeout(startGroupTimers[groupId]);
+  delete startGroupTimers[groupId];
+  const btn = document.querySelector(`[data-start-group="${groupId}"]`);
+  if (!btn) return;
+  delete btn.dataset.confirm;
+  btn.textContent = '一键开始';
+  btn.classList.remove('btn-ghost');
+  btn.classList.add('btn-primary');
+}
+
 // ─── alerting ───
 let alertBeepLoop = null;
 const alertedIds = new Set();
@@ -1059,6 +1109,7 @@ function buildGroup(g) {
       </div>
       <div class="group-actions">
         <button class="btn btn-success btn-sm" onclick="addTimer(${g.id})">+ 添加计时器</button>
+        <button class="btn btn-primary btn-sm" data-start-group="${g.id}" onclick="startAllInGroup(${g.id})">一键开始</button>
         <button class="btn btn-danger btn-sm" data-reset-group="${g.id}" onclick="resetGroup(${g.id})">重置该组</button>
         <button class="group-remove" onclick="removeGroup(${g.id})" title="删除分组">×</button>
       </div>
